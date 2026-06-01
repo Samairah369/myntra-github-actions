@@ -1,64 +1,70 @@
 name: Manual Build and Deploy to Amazon EKS
 
 on:
-  workflow_dispatch: # Isse GitHub Actions mai "Run workflow" ka button aa jayega
+  workflow_dispatch: # GitHub dashboard se manually chalanay ke liye
 
 env:
-  AWS_REGION: ap-south-1                              # Aapka Mumbai region
-  ECR_REPOSITORY: myntra-app                          # Apni ECR repo ka naam yahan likhein
-  EKS_CLUSTER_NAME: MyEKS                             # Jo aapke EKS cluster ka naam hai
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: my-ecr-repofor-eks
 
 jobs:
   deploy:
-    name: Build, Push and Deploy
+    name: Deploy-to-EKS
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Code
+    - name: Checkout repository
       uses: actions/checkout@v3
 
-    # Step 1: AWS Credentials Configure karna using GitHub Secrets
-    - name: Configure AWS Credentials
+    # 1. AWS Credentials Configure karna using GitHub Secrets
+    - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v2
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ env.AWS_REGION }}
 
-    # Step 2: Amazon ECR mai Login karna
+    # 2. Kubectl Setup karna (Jo aapke workflow mai azure/setup-kubectl use ho raha hai)
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v4
+      with:
+        version: 'v1.35' # Jo aapke cluster ka version hai (screenshot ke mutabik)
+
+    # 3. Kubeconfig Update karna - Isme ab kabhi error nahi aayega
+    - name: Update kubeconfig for EKS
+      run: |
+        aws eks update-kubeconfig --region ap-south-1 --name MyEKS
+
+    # 4. Connection check karna
+    - name: test kubectl connection
+      run: |
+        kubectl get nodes
+
+    # 5. AWS ECR mai login karna
     - name: Login to Amazon ECR
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
 
-    # Step 3: Docker Image Build aur Push karna ECR mai
+    # 6. Docker Image Build aur ECR mai push karna
     - name: Build, tag, and push image to Amazon ECR
       id: build-image
       env:
         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        IMAGE_TAG: ${{ github.sha }}                  # Har run par unique commit ID lag jayega
+        IMAGE_TAG: ${{ github.sha }}
       run: |
         docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
         docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
         echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-    # Step 4: Kubeconfig Update karna taaki GitHub runner cluster se connect ho sake
-    - name: Update Kubeconfig for EKS
-      run: |
-        aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER_NAME }}
-
-    # Step 5: Kubernetes par Deploy karna
-    # Note: Agar aapke teacher ne Helm use kiya hai toh neeche Helm wala command use karein, 
-    # nahi toh kubectl apply use karein.
-    - name: Deploy to EKS
+    # 7. Manifests update aur apply karna
+    - name: Update deployment image to new ECR image
       env:
         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         IMAGE_TAG: ${{ github.sha }}
       run: |
-        # 1. AGAR MANIFEST FILES (YAML) USE KAR RAHE HAIN:
-        # sed -i "s|GITHUB_IMAGE_PLACEHOLDER|$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG|g" k8s/deployment.yaml
-        # kubectl apply -f k8s/
-        
-        # 2. AGAR HELM CHART USE KAR RAHE HAIN (Jo aapne EC2 mai setup kiya tha):
-        helm upgrade --install myntra-release ./helm-charts \
-          --set image.repository=$ECR_REGISTRY/$ECR_REPOSITORY \
-          --set image.tag=$IMAGE_TAG
+        # Agar manifest file hai toh use update karein (yahan k8s/deployment.yaml check kar lena)
+        sed -i "s|GITHUB_IMAGE_PLACEHOLDER|$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG|g" k8s/deployment.yaml
+
+    - name: Apply Kubernetes manifests
+      run: |
+        kubectl apply -f k8s/
