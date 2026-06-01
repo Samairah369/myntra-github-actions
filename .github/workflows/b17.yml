@@ -1,94 +1,64 @@
-name: B17 EKS Project
+name: Manual Build and Deploy to Amazon EKS
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Isse GitHub Actions mai "Run workflow" ka button aa jayega
+
+env:
+  AWS_REGION: ap-south-1                              # Aapka Mumbai region
+  ECR_REPOSITORY: myntra-app                          # Apni ECR repo ka naam yahan likhein
+  EKS_CLUSTER_NAME: MyEKS                             # Jo aapke EKS cluster ka naam hai
 
 jobs:
-  Build:
+  deploy:
+    name: Build, Push and Deploy
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout source code
-        uses: actions/checkout@v3
+    - name: Checkout Code
+      uses: actions/checkout@v3
 
-      - name: Performing Unit Tests
-        run: |
-          echo "Running unit tests..."
-          sleep 10
+    # Step 1: AWS Credentials Configure karna using GitHub Secrets
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
 
-      - name: Code quality checks
-        run: |
-          echo "Running code quality checks..."
-          sleep 10
+    # Step 2: Amazon ECR mai Login karna
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-south-1
+    # Step 3: Docker Image Build aur Push karna ECR mai
+    - name: Build, tag, and push image to Amazon ECR
+      id: build-image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}                  # Har run par unique commit ID lag jayega
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      - name: Log in to Amazon ECR
-        run: |
-          aws ecr get-login-password --region ap-south-1 | \
-          docker login --username AWS --password-stdin 827919544150.dkr.ecr.ap-south-1.amazonaws.com
+    # Step 4: Kubeconfig Update karna taaki GitHub runner cluster se connect ho sake
+    - name: Update Kubeconfig for EKS
+      run: |
+        aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER_NAME }}
 
-      - name: Build Docker image
-        run: |
-          IMAGE_URI=827919544150.dkr.ecr.ap-south-1.amazonaws.com/my-ecr-repofor-eks:${{ github.sha }}
-          docker build -t $IMAGE_URI .
-
-      - name: Push image to Amazon ECR 
-        run: |
-          IMAGE_URI=827919544150.dkr.ecr.ap-south-1.amazonaws.com/my-ecr-repofor-eks:${{ github.sha }}
-          docker push $IMAGE_URI
-
-      - name: Verify image in ECR
-        run: |
-          echo "Checking if image exists in ECR..."
-          aws ecr describe-images \
-            --repository-name my-ecr-repofor-eks \
-            --image-ids imageTag=${{ github.sha }} \
-            --region ap-south-1 \
-          && echo "✅ Image exists in ECR" \
-          || (echo "❌ Image not found in ECR" && exit 1)
-
-  Deploy-to-EKS:
-    runs-on: ubuntu-latest
-    needs: Build
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-south-1
-
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v4
-        with:
-          version: 'latest'
-
-      - name: Update kubeconfig for EKS
-        run: |
-          aws eks update-kubeconfig --region ap-south-1 --name MyEKS
-
-      - name: test kubectl connection 
-        run: |
-          kubectl get nodes
-
-      - name: Update deployment image to new ECR image
-        run: |
-          IMAGE_URI=827919544150.dkr.ecr.ap-south-1.amazonaws.com/my-ecr-repofor-eks:${{ github.sha }}
-          echo "Updating k8s/app/deployment-service.yml to use $IMAGE_URI"
-          sed -i "s|image: .*|image: $IMAGE_URI|" k8s/app/deployment-service.yml
-          echo "--- Updated manifest ---"
-          cat k8s/app/deployment-service.yml
-
-      - name: Apply Kubernetes manifests
-        run: |
-          kubectl apply -f k8s/app --validate=false
+    # Step 5: Kubernetes par Deploy karna
+    # Note: Agar aapke teacher ne Helm use kiya hai toh neeche Helm wala command use karein, 
+    # nahi toh kubectl apply use karein.
+    - name: Deploy to EKS
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        # 1. AGAR MANIFEST FILES (YAML) USE KAR RAHE HAIN:
+        # sed -i "s|GITHUB_IMAGE_PLACEHOLDER|$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG|g" k8s/deployment.yaml
+        # kubectl apply -f k8s/
+        
+        # 2. AGAR HELM CHART USE KAR RAHE HAIN (Jo aapne EC2 mai setup kiya tha):
+        helm upgrade --install myntra-release ./helm-charts \
+          --set image.repository=$ECR_REGISTRY/$ECR_REPOSITORY \
+          --set image.tag=$IMAGE_TAG
