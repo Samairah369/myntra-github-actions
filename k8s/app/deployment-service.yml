@@ -17,4 +17,5 @@ spec:
         - name: myntra
           image: 827919544150.dkr.ecr.ap-south-1.amazonaws.com/my-ecr-repofor-eks:latest
           ports:
-            - containerPort: 3000  # Use port 3000
+            - containerPort: 3000  # Container ka internal port
+              hostPort: 80         #  application ko direct EC2 ke Public IP par expose karega
