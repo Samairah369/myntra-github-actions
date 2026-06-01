@@ -4,7 +4,7 @@ kind: Deployment
 metadata:
   name: myntra
 spec:
-  replicas: 4
+  replicas: 1              # Sirf 1 pod chalayenge taaki hostPort bind ho sake
   selector:
     matchLabels:
       app: myntra
@@ -17,5 +17,5 @@ spec:
         - name: myntra
           image: 827919544150.dkr.ecr.ap-south-1.amazonaws.com/my-ecr-repofor-eks:latest
           ports:
-            - containerPort: 3000  # Container ka internal port
-              hostPort: 80         #  application ko direct EC2 ke Public IP par expose karega
+            - containerPort: 3000
+              hostPort: 80         # Direct EC2 Public IP access ke liye
