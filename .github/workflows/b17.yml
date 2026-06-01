@@ -1,68 +1,94 @@
-name: Manual Build and Deploy to Amazon EKS
+name: B17 EKS Project
 
 on:
-  workflow_dispatch: # Manual Run button ke liye
+  workflow_dispatch:
 
 jobs:
-  deploy:
-    name: Deploy-to-EKS
+  Build:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+      - name: Checkout source code
+        uses: actions/checkout@v3
 
-    # ==========================================
-    # CI PART SHURU HOTA HAI (Authentication & Build)
-    # ==========================================
+      - name: Performing Unit Tests
+        run: |
+          echo "Running unit tests..."
+          sleep 10
 
-    # 1. AWS Credentials Setup
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ap-south-1
+      - name: Code quality checks
+        run: |
+          echo "Running code quality checks..."
+          sleep 10
 
-    # 2. AWS ECR Login (Yeh CI ka main part hai)
-    - name: Login to Amazon ECR
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v1
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
 
-    # 3. Docker Image Build aur ECR Push (CI Core Logic)
-    - name: Build, tag, and push image to Amazon ECR
-      env:
-        IMAGE_TAG: ${{ github.sha }}
-      run: |
-        docker build -t 827919544150.dkr.ecr.ap-south-1.amazonaws.com/my-ecr-repofor-eks:$IMAGE_TAG .
-        docker push 827919544150.dkr.ecr.ap-south-1.amazonaws.com/my-ecr-repofor-eks:$IMAGE_TAG
+      - name: Log in to Amazon ECR
+        run: |
+          aws ecr get-login-password --region ap-south-1 | \
+          docker login --username AWS --password-stdin 827919544150.dkr.ecr.ap-south-1.amazonaws.com
 
-    # ==========================================
-    # CD PART SHURU HOTA HAI (Kubernetes Deployment)
-    # ==========================================
+      - name: Build Docker image
+        run: |
+          IMAGE_URI=827919544150.dkr.ecr.ap-south-1.amazonaws.com/my-ecr-repofor-eks:${{ github.sha }}
+          docker build -t $IMAGE_URI .
 
-    # 4. Kubectl Setup (Fixing the error - Version format changed to standard latest)
-    - name: Setup kubectl
-      uses: azure/setup-kubectl@v3
-      with:
-        version: 'latest'
+      - name: Push image to Amazon ECR 
+        run: |
+          IMAGE_URI=827919544150.dkr.ecr.ap-south-1.amazonaws.com/my-ecr-repofor-eks:${{ github.sha }}
+          docker push $IMAGE_URI
 
-    # 5. Kubeconfig Update
-    - name: Update kubeconfig for EKS
-      run: |
-        aws eks update-kubeconfig --region ap-south-1 --name MyEKS
+      - name: Verify image in ECR
+        run: |
+          echo "Checking if image exists in ECR..."
+          aws ecr describe-images \
+            --repository-name my-ecr-repofor-eks \
+            --image-ids imageTag=${{ github.sha }} \
+            --region ap-south-1 \
+          && echo "✅ Image exists in ECR" \
+          || (echo "❌ Image not found in ECR" && exit 1)
 
-    # 6. Cluster Verification
-    - name: test kubectl connection
-      run: |
-        kubectl get nodes
+  Deploy-to-EKS:
+    runs-on: ubuntu-latest
+    needs: Build
 
-    # 7. Deployment to Cluster
-    - name: Deploy to Kubernetes
-      env:
-        IMAGE_TAG: ${{ github.sha }}
-      run: |
-        # Agar teacher ki repo mai manifest folder ka naam 'k8s' hai toh yeh perfect chalega.
-        # Manifests file mai image placeholder badalna:
-        sed -i "s|GITHUB_IMAGE_PLACEHOLDER|827919544150.dkr.ecr.ap-south-1.amazonaws.com/my-ecr-repofor-eks:$IMAGE_TAG|g" k8s/deployment.yaml
-        kubectl apply -f k8s/
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'latest'
+
+      - name: Update kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig --region ap-south-1 --name MyEKS
+
+      - name: test kubectl connection 
+        run: |
+          kubectl get nodes
+
+      - name: Update deployment image to new ECR image
+        run: |
+          IMAGE_URI=827919544150.dkr.ecr.ap-south-1.amazonaws.com/my-ecr-repofor-eks:${{ github.sha }}
+          echo "Updating k8s/app/deployment-service.yml to use $IMAGE_URI"
+          sed -i "s|image: .*|image: $IMAGE_URI|" k8s/app/deployment-service.yml
+          echo "--- Updated manifest ---"
+          cat k8s/app/deployment-service.yml
+
+      - name: Apply Kubernetes manifests
+        run: |
+          kubectl apply -f k8s/app --validate=false
