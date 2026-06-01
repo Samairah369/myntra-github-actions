@@ -1,7 +1,7 @@
 name: Manual Build and Deploy to Amazon EKS
 
 on:
-  workflow_dispatch: # GitHub dashboard se manually chalane ke liye button
+  workflow_dispatch: # Manual Run button ke liye
 
 jobs:
   deploy:
@@ -12,55 +12,57 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
 
-    # 1. AWS Credentials Configure karna (Sirf aapke secrets use honge)
+    # ==========================================
+    # CI PART SHURU HOTA HAI (Authentication & Build)
+    # ==========================================
+
+    # 1. AWS Credentials Setup
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v2
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ap-south-1 # Region humne yahan direct de diya hai
+        aws-region: ap-south-1
 
-    # 2. Kubectl Setup karna
-    - name: Setup kubectl
-      uses: azure/setup-kubectl@v4
-      with:
-        version: 'v1.35'
-
-    # 3. Kubeconfig Update karna (Dono cheezein bilkul hardcoded)
-    - name: Update kubeconfig for EKS
-      run: |
-        aws eks update-kubeconfig --region ap-south-1 --name MyEKS
-
-    # 4. Connection check karna
-    - name: test kubectl connection
-      run: |
-        kubectl get nodes
-
-    # 5. AWS ECR mai login karna
+    # 2. AWS ECR Login (Yeh CI ka main part hai)
     - name: Login to Amazon ECR
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
 
-    # 6. Docker Image Build aur ECR mai push karna
+    # 3. Docker Image Build aur ECR Push (CI Core Logic)
     - name: Build, tag, and push image to Amazon ECR
-      id: build-image
       env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         IMAGE_TAG: ${{ github.sha }}
       run: |
-        docker build -t $ECR_REGISTRY/my-ecr-repofor-eks:$IMAGE_TAG .
-        docker push $ECR_REGISTRY/my-ecr-repofor-eks:$IMAGE_TAG
-        echo "image=$ECR_REGISTRY/my-ecr-repofor-eks:$IMAGE_TAG" >> $GITHUB_OUTPUT
+        docker build -t 827919544150.dkr.ecr.ap-south-1.amazonaws.com/my-ecr-repofor-eks:$IMAGE_TAG .
+        docker push 827919544150.dkr.ecr.ap-south-1.amazonaws.com/my-ecr-repofor-eks:$IMAGE_TAG
 
-    # 7. Manifests update aur apply karna
-    - name: Update deployment image to new ECR image
+    # ==========================================
+    # CD PART SHURU HOTA HAI (Kubernetes Deployment)
+    # ==========================================
+
+    # 4. Kubectl Setup (Fixing the error - Version format changed to standard latest)
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+
+    # 5. Kubeconfig Update
+    - name: Update kubeconfig for EKS
+      run: |
+        aws eks update-kubeconfig --region ap-south-1 --name MyEKS
+
+    # 6. Cluster Verification
+    - name: test kubectl connection
+      run: |
+        kubectl get nodes
+
+    # 7. Deployment to Cluster
+    - name: Deploy to Kubernetes
       env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         IMAGE_TAG: ${{ github.sha }}
       run: |
-        # Yahan check kar lena ki aapke folder ka naam k8s hai ya templates
-        sed -i "s|GITHUB_IMAGE_PLACEHOLDER|$ECR_REGISTRY/my-ecr-repofor-eks:$IMAGE_TAG|g" k8s/deployment.yaml
-
-    - name: Apply Kubernetes manifests
-      run: |
+        # Agar teacher ki repo mai manifest folder ka naam 'k8s' hai toh yeh perfect chalega.
+        # Manifests file mai image placeholder badalna:
+        sed -i "s|GITHUB_IMAGE_PLACEHOLDER|827919544150.dkr.ecr.ap-south-1.amazonaws.com/my-ecr-repofor-eks:$IMAGE_TAG|g" k8s/deployment.yaml
         kubectl apply -f k8s/
