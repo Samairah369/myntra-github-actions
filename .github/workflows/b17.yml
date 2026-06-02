@@ -21,6 +21,10 @@ jobs:
           echo "Running code quality checks..."
           sleep 10
 
+      - name: do some calculations
+        run: |
+          echo "10 + 20 = $((10 + 20))"
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
