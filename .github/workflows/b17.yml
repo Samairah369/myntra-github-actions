@@ -1,7 +1,9 @@
 name: B17 EKS Project
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   Build:
