@@ -18,6 +18,14 @@ jobs:
           echo "Running unit tests..."
           sleep 10
 
+      - name: do some calculations
+        run: |
+          echo "100 + 100 = $((100 + 100))"
+
+      - name: print a new message
+        run: |
+          echo "This is a Salman Khan project"
+
       - name: Code quality checks
         run: |
           echo "Running code quality checks..."
